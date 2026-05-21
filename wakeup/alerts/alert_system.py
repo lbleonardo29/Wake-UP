@@ -16,7 +16,6 @@ import sys
 import math
 import time
 import struct
-import threading
 import wave
 
 import config
@@ -75,7 +74,7 @@ if sys.platform == "win32":
     try:
         import winsound as _winsound
         if _pygame_sound is None:
-            print("[AlertSystem] Backend: winsound")
+            print("[AlertSystem] Backend: winsound (PlaySound async)")
     except ImportError:
         pass
 
@@ -99,10 +98,11 @@ class AlertSystem:
             except Exception:
                 pass
         if _winsound is not None:
-            def _beep():
-                _winsound.Beep(950, 140)
-                _winsound.Beep(950, 140)
-            threading.Thread(target=_beep, daemon=True).start()
+            # SND_FILENAME | SND_ASYNC reproduce el WAV sin bloquear el loop
+            _winsound.PlaySound(
+                _SOUND_FILE,
+                _winsound.SND_FILENAME | _winsound.SND_ASYNC | _winsound.SND_NODEFAULT,
+            )
 
     def trigger(self):
         """Dispara la alerta (con cooldown para no repetir cada frame)."""

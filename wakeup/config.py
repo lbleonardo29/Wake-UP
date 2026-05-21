@@ -7,10 +7,10 @@ FRAME_WIDTH = 1280        # Resolución de captura (ventana más grande)
 FRAME_HEIGHT = 720
 
 # ── Detección de ojos (EAR) ──
-EAR_THRESHOLD = 0.22      # Debajo de este valor, el ojo se considera cerrado
+EAR_THRESHOLD = 0.20      # Debajo de este valor, el ojo se considera cerrado
                           # Calibra esto con tu cara: corre calibrate.py
-EAR_CONSEC_FRAMES = 15    # Frames consecutivos con EAR bajo para activar alerta
-                          # A 30 FPS, 15 frames ≈ 0.5 segundos
+EAR_CONSEC_FRAMES = 25    # Frames consecutivos con EAR bajo para activar alerta
+                          # A 30 FPS, 25 frames ≈ 0.83 segundos
 
 # ── Alerta ──
 ALERT_SOUND = "alerts/alert.wav"  # Ruta al sonido de alerta (se genera automáticamente)
