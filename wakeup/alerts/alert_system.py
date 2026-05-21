@@ -1,27 +1,30 @@
 # alerts/alert_system.py — Sistema de alertas
 #
 # Dos tipos de alerta:
-# 1. Visual: el frame se pinta de rojo + texto "¡DESPIERTA!"
-# 2. Sonora: un beep usando pygame (no bloqueante)
+# 1. Visual: el frame se tiñe de rojo (pulsante) + texto "¡DESPIERTA!"
+# 2. Sonora: un beep doble no bloqueante para despertar al conductor
 #
-# ¿Por qué pygame para audio y no playsound o winsound?
-# - playsound es bloqueante (congela el video mientras suena)
-# - winsound solo funciona en Windows
-# - pygame.mixer es no bloqueante, cross-platform y ligero
+# Audio: usamos pygame.mixer (no bloqueante, cross-platform). Si no está
+# disponible, caemos a winsound en un hilo (Windows) para no congelar el video.
 
 import time
-import cv2
-import numpy as np
+import math
+import threading
 import config
+from utils import ui
 
-# pygame es opcional — si no lo tiene, solo alerta visual
+# pygame es opcional — si no lo tiene, intentamos winsound (Windows)
 try:
     import pygame
     pygame.mixer.init()
-    SOUND_AVAILABLE = True
-except ImportError:
-    SOUND_AVAILABLE = False
-    print("[AlertSystem] pygame no instalado, solo alertas visuales")
+    SOUND_BACKEND = "pygame"
+except Exception:
+    try:
+        import winsound  # solo Windows
+        SOUND_BACKEND = "winsound"
+    except ImportError:
+        SOUND_BACKEND = None
+        print("[AlertSystem] Sin backend de audio, solo alertas visuales")
 
 
 class AlertSystem:
@@ -29,41 +32,70 @@ class AlertSystem:
         self.last_alert_time = 0
         self.alert_active = False
 
-        # Generar beep si no existe
-        if SOUND_AVAILABLE:
+        # Generar beep si no existe (solo lo necesita pygame)
+        if SOUND_BACKEND == "pygame":
             self._ensure_sound()
+            try:
+                self._sound = pygame.mixer.Sound(config.ALERT_SOUND)
+            except Exception as e:
+                print(f"[AlertSystem] No se pudo cargar el sonido: {e}")
+                self._sound = None
 
     def _ensure_sound(self):
-        """Genera un archivo beep.wav si no existe."""
+        """Genera el WAV de alerta si no existe."""
         import os
         sound_path = config.ALERT_SOUND
         os.makedirs(os.path.dirname(sound_path), exist_ok=True)
 
         if not os.path.exists(sound_path):
             self._generate_beep(sound_path)
-            print(f"[AlertSystem] Beep generado en {sound_path}")
+            print(f"[AlertSystem] Sonido generado en {sound_path}")
 
     def _generate_beep(self, path):
-        """Crea un archivo WAV con un tono de alerta."""
+        """Crea un WAV con un beep doble (más perceptible para despertar)."""
         import struct
         import wave
 
         sample_rate = 44100
-        duration = 0.5         # 0.5 segundos
-        frequency = 880        # La4 alta (urgente pero no molesta)
-        n_samples = int(sample_rate * duration)
+        beep = 0.14            # duración de cada beep
+        gap = 0.07             # silencio entre beeps
+        frequency = 950        # tono agudo, urgente pero no molesto
+
+        def tone(samples):
+            for i in range(samples):
+                t = i / sample_rate
+                env = min(t / 0.01, 1.0) * min((beep - t) / 0.01, 1.0)
+                yield int(32767 * env * math.sin(2 * math.pi * frequency * t))
+
+        n_beep = int(sample_rate * beep)
+        n_gap = int(sample_rate * gap)
 
         with wave.open(path, 'w') as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(sample_rate)
+            for _ in range(2):  # dos beeps
+                for v in tone(n_beep):
+                    wav.writeframes(struct.pack('<h', v))
+                for _ in range(n_gap):
+                    wav.writeframes(struct.pack('<h', 0))
 
-            for i in range(n_samples):
-                t = i / sample_rate
-                # Tono con fade in/out para que no trone
-                envelope = min(t / 0.05, 1.0) * min((duration - t) / 0.05, 1.0)
-                value = int(32767 * envelope * np.sin(2 * np.pi * frequency * t))
-                wav.writeframes(struct.pack('<h', value))
+    def _play_sound(self):
+        """Reproduce el sonido de forma no bloqueante."""
+        if SOUND_BACKEND == "pygame":
+            if self._sound is not None:
+                try:
+                    self._sound.play()
+                except Exception as e:
+                    print(f"[AlertSystem] Error de audio: {e}")
+        elif SOUND_BACKEND == "winsound":
+            def _beep():
+                try:
+                    winsound.Beep(950, 140)
+                    winsound.Beep(950, 140)
+                except Exception:
+                    pass
+            threading.Thread(target=_beep, daemon=True).start()
 
     def trigger(self):
         """Dispara la alerta si pasó el cooldown."""
@@ -73,43 +105,24 @@ class AlertSystem:
 
         self.alert_active = True
         self.last_alert_time = now
-
-        # Sonido
-        if SOUND_AVAILABLE:
-            try:
-                sound = pygame.mixer.Sound(config.ALERT_SOUND)
-                sound.play()
-            except Exception as e:
-                print(f"[AlertSystem] Error de audio: {e}")
+        self._play_sound()
 
     def reset(self):
         """Resetea la alerta cuando el conductor vuelve a estar alerta."""
         self.alert_active = False
 
-    def draw_alert(self, frame):
-        """Dibuja overlay rojo + texto de alerta sobre el frame."""
+    def draw_alert(self, ov):
+        """Dibuja tinte rojo pulsante + texto de alerta sobre el overlay."""
         if not self.alert_active:
-            return frame
+            return ov
 
-        # Overlay rojo semi-transparente
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (frame.shape[1], frame.shape[0]),
-                      (0, 0, 255), -1)
-        frame = cv2.addWeighted(overlay, 0.3, frame, 0.7, 0)
+        # Tinte rojo pulsante (atrae la mirada)
+        pulse = 0.5 + 0.5 * math.sin(time.time() * 6.0)
+        ov.full_tint(ui.COL_DANGER, alpha=70 + 50 * pulse)
 
-        # Texto de alerta
-        text = "DESPIERTA!"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = 1.5
-        thickness = 3
-        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-        cx = (frame.shape[1] - tw) // 2
-        cy = (frame.shape[0] + th) // 2
-
-        # Sombra + texto
-        cv2.putText(frame, text, (cx + 2, cy + 2), font, scale,
-                    (0, 0, 0), thickness + 2)
-        cv2.putText(frame, text, (cx, cy), font, scale,
-                    (0, 0, 255), thickness)
-
-        return frame
+        cx, cy = ov.w // 2, ov.h // 2
+        ov.text_centered(cx, cy - 18, "¡DESPIERTA!", size=78, bold=True,
+                         color=(255, 255, 255))
+        ov.text_centered(cx, cy + 48, "Mantente alerta", size=28, bold=False,
+                         color=(255, 230, 230))
+        return ov

@@ -23,56 +23,71 @@ from capture.camera import Camera
 from detection.face_detector import FaceDetector
 from detection.ear_calculator import compute_avg_ear
 from alerts.alert_system import AlertSystem
+from utils import ui
 
 
-def draw_hud(frame, ear, counter, fps, alert_system):
-    """Dibuja el HUD (heads-up display) sobre el frame."""
-    h, w = frame.shape[:2]
+def draw_hud(ov, ear, counter, fps, face_ok):
+    """Dibuja el HUD (heads-up display) sobre el overlay."""
+    w, h = ov.w, ov.h
 
-    # Barra de estado superior
-    cv2.rectangle(frame, (0, 0), (w, 45), (30, 30, 30), -1)
+    # ── Estado actual ──
+    if counter >= config.EAR_CONSEC_FRAMES:
+        status, status_color = "SOMNOLIENTO", ui.COL_DANGER
+    elif ear < config.EAR_THRESHOLD:
+        status, status_color = "OJOS CERRADOS", ui.COL_WARN
+    else:
+        status, status_color = "ALERTA", ui.COL_OK
+    ear_color = ui.COL_OK if ear > config.EAR_THRESHOLD else ui.COL_DANGER
+
+    # ── Barra superior ──
+    ov.panel((0, 0, w, 72), color=ui.COL_PANEL, alpha=205, radius=0)
+    ov.text((28, 36), "Wake", size=30, bold=True, color=ui.COL_TEXT, anchor="lm")
+    ear_lbl_w = 96  # ancho aproximado de "Wake"
+    ov.text((28 + ear_lbl_w, 36), "UP", size=30, bold=True,
+            color=ui.COL_ACCENT, anchor="lm")
 
     # EAR
     if config.SHOW_EAR_VALUE:
-        color = (0, 255, 0) if ear > config.EAR_THRESHOLD else (0, 0, 255)
-        cv2.putText(frame, f"EAR: {ear:.3f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        ov.text((300, 22), "EAR", size=15, color=ui.COL_DIM, anchor="lm")
+        ov.text((300, 46), f"{ear:.3f}", size=26, bold=True,
+                color=ear_color, anchor="lm")
 
-    # Contador de frames con ojos cerrados
-    cv2.putText(frame, f"Cerrado: {counter}/{config.EAR_CONSEC_FRAMES}",
-                (200, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+    # Contador de cierre
+    ov.text((430, 22), "CIERRE", size=15, color=ui.COL_DIM, anchor="lm")
+    ov.text((430, 46), f"{counter}/{config.EAR_CONSEC_FRAMES}", size=26,
+            bold=True, color=ui.COL_TEXT, anchor="lm")
 
     # FPS
     if config.SHOW_FPS:
-        cv2.putText(frame, f"FPS: {fps:.0f}", (w - 110, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        ov.text((w - 28, 22), "FPS", size=15, color=ui.COL_DIM, anchor="rm")
+        ov.text((w - 28, 46), f"{fps:.0f}", size=26, bold=True,
+                color=ui.COL_TEXT, anchor="rm")
 
-    # Estado
-    if counter >= config.EAR_CONSEC_FRAMES:
-        status = "SOMNOLIENTO"
-        status_color = (0, 0, 255)
-    elif ear < config.EAR_THRESHOLD:
-        status = "OJOS CERRADOS"
-        status_color = (0, 165, 255)
-    else:
-        status = "ALERTA"
-        status_color = (0, 255, 0)
+    # ── Badge de estado (abajo izquierda) ──
+    if face_ok:
+        bw, bh = 260, 56
+        bx, by = 28, h - bh - 28
+        ov.panel((bx, by, bx + bw, by + bh), color=status_color, alpha=46,
+                 radius=14)
+        ov.bar((bx, by + 14, bx + 8, by + bh - 14), status_color, radius=4)
+        ov.text((bx + 24, by + bh // 2), status, size=24, bold=True,
+                color=status_color, anchor="lm")
 
-    cv2.putText(frame, status, (10, h - 15),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+    # ── Medidor EAR (abajo derecha) ──
+    mw = 300
+    mx, my = w - mw - 28, h - 40
+    ov.text((mx, my - 22), "Nivel de apertura", size=14, color=ui.COL_DIM,
+            anchor="lm")
+    ov.panel((mx, my, mx + mw, my + 18), color=(40, 44, 56), alpha=220,
+             radius=9)
+    fill_w = int(np.clip(ear / 0.4, 0, 1) * mw)
+    if fill_w > 6:
+        ov.bar((mx, my, mx + fill_w, my + 18), ear_color, radius=9)
+    # Marca del umbral
+    thresh_x = mx + int((config.EAR_THRESHOLD / 0.4) * mw)
+    ov.line((thresh_x, my - 4), (thresh_x, my + 22), ui.COL_DANGER, width=2)
 
-    # Barra visual de EAR (como un medidor)
-    bar_w = int(np.clip(ear / 0.4, 0, 1) * 200)
-    cv2.rectangle(frame, (w - 220, h - 30), (w - 220 + bar_w, h - 10),
-                  (0, int(255 * min(ear / 0.3, 1)), 0), -1)
-    cv2.rectangle(frame, (w - 220, h - 30), (w - 20, h - 10),
-                  (100, 100, 100), 1)
-
-    # Línea del umbral en la barra
-    thresh_x = w - 220 + int((config.EAR_THRESHOLD / 0.4) * 200)
-    cv2.line(frame, (thresh_x, h - 32), (thresh_x, h - 8), (0, 0, 255), 2)
-
-    return frame
+    return ov
 
 
 def main():
@@ -93,9 +108,14 @@ def main():
     detector = FaceDetector()
     alert = AlertSystem()
 
+    # Ventana redimensionable, iniciada al tamaño de captura
+    cv2.namedWindow("WakeUP", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("WakeUP", config.FRAME_WIDTH, config.FRAME_HEIGHT)
+
     # Estado
     closed_counter = 0   # Frames consecutivos con ojos cerrados
     ear = 0.0
+    left_ear = right_ear = 0.0
     fps = 0.0
     prev_time = time.time()
 
@@ -112,6 +132,7 @@ def main():
 
             # 2. Detectar rostro
             landmarks, results = detector.process(frame)
+            face_ok = landmarks is not None
 
             if landmarks is not None:
                 # 3. Extraer puntos de los ojos
@@ -134,22 +155,21 @@ def main():
                 if config.SHOW_LANDMARKS:
                     detector.draw_eyes(frame, landmarks)
 
-            else:
-                # No se detectó rostro
-                cv2.putText(frame, "Sin rostro detectado", (10, 80),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
             # Calcular FPS
             current_time = time.time()
             fps = 1.0 / (current_time - prev_time + 1e-6)
             prev_time = current_time
 
-            # Dibujar HUD y alerta
-            frame = draw_hud(frame, ear, closed_counter, fps, alert)
-            frame = alert.draw_alert(frame)
+            # Dibujar HUD y alerta sobre un overlay con fuentes TrueType
+            ov = ui.Overlay(frame)
+            draw_hud(ov, ear, closed_counter, fps, face_ok)
+            if not face_ok:
+                ov.text_centered(ov.w // 2, 110, "Sin rostro detectado",
+                                 size=26, bold=True, color=ui.COL_DIM)
+            alert.draw_alert(ov)
 
             # Mostrar
-            cv2.imshow("WakeUP", frame)
+            cv2.imshow("WakeUP", ov.result())
 
             # Controles
             key = cv2.waitKey(1) & 0xFF
