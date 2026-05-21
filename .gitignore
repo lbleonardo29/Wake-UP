@@ -127,3 +127,7 @@ venv.bak/
 # Local OS files
 .DS_Store
 Thumbs.db
+
+# Project-specific ignores
+.claude/
+**/alert.wav
